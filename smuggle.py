@@ -37,24 +37,41 @@ colorama.init()
 utils = Utils()
 constants = Constants()
 
+
 # Argument parser
 parser = argparse.ArgumentParser(description='HTTP Request Smuggling vulnerability detection tool')
-parser.add_argument("-u", "--url", help="set the target url")
-parser.add_argument("-urls", "--urls", help="set list of target urls, i.e (urls.txt)")
+group = parser.add_mutually_exclusive_group(required=True)
+group.add_argument("-u", "--url", help="set the target url")
+group.add_argument("-urls", "--urls", help="set list of target urls, i.e (urls.txt)")
 parser.add_argument("-t", "--timeout", help="set socket timeout, default - 10")
 parser.add_argument("-m", "--method", help="set HTTP Methods, i.e (GET or POST), default - POST")
 parser.add_argument("-r", "--retry", help="set the retry count to re-execute the payload, default - 2")
+parser.add_argument("-type", "--type", help="set the header type")
 args = parser.parse_args()
 
 
 def hrs_detection(_host, _port, _path, _method, permute_type, content_length_key, te_key, te_value, smuggle_type,
-                  content_length, payload, _timeout):
+                  connection_type, content_type, content_length, payload, _timeout, other_headers):
     headers = ''
     headers += '{} {} HTTP/1.1{}'.format(_method, _path, constants.crlf)
     headers += 'Host: {}{}'.format(_host, constants.crlf)
-    headers += '{} {}{}'.format(content_length_key, content_length, constants.crlf)
-    headers += '{}{}{}'.format(te_key, te_value, constants.crlf)
-    smuggle_body = headers + payload
+    if content_length_key and content_length:
+        headers += '{} {}{}'.format(content_length_key, content_length, constants.crlf)
+    if te_key and te_value:
+        headers += '{}{}{}'.format(te_key, te_value, constants.crlf)
+    if connection_type:
+        headers += '{}{}{}'.format("Connection: ", connection_type, constants.crlf)
+    if content_type:
+        headers += '{}{}{}'.format("Content-Type: ", content_type, constants.crlf)
+
+    if other_headers:
+        for h in other_headers:
+            if h != constants.connection and h != constants.content_type and h != constants.content_length and h != constants.type and h != constants.payload:
+                headers += '{}: {}{}'.format(h, other_headers[h], constants.crlf)
+    if payload:
+        smuggle_body = headers + payload
+    else:
+        smuggle_body = headers + "/r/n"
 
     permute_type = "[" + permute_type + "]"
     elapsed_time = "-"
@@ -77,9 +94,24 @@ def hrs_detection(_host, _port, _path, _method, permute_type, content_length_key
         connection.connect(_host, _port, _timeout)
         connection.send_payload(smuggle_body)
 
-        response = connection.receive_data().decode("utf-8")
-        end_time = time.time()
+        # Write payload to log
+        _log = constants.reports + '/{}/{}'.format(_host, "response.log")
+        utils.write_payload(_log, "[{}] - {}:\nRequest:\n{}".
+                            format(permute_type, smuggle_type, smuggle_body))
 
+        response = ""
+        get_response_time = None
+        while True:
+            res = connection.receive_data().decode("utf-8")
+            if res:
+                if response == "":
+                    get_response_time = time.time()
+                response = response + res
+                break
+            else:
+                break
+        if not get_response_time:
+            get_response_time = time.time()
         if len(response.split()) > 0:
             status_code = response.split()[1]
         else:
@@ -93,10 +125,11 @@ def hrs_detection(_host, _port, _path, _method, permute_type, content_length_key
         # false positive So to confirm the vulnerability you can use burp-suite turbo intruder and try your own
         # payloads. https://portswigger.net/web-security/request-smuggling/finding
 
-        elapsed_time = str(round((end_time - start_time) % 60, 2)) + "s"
+        elapsed_time = str(round((get_response_time - start_time) % 60, 2)) + "s"
         _style_elapsed_time = "{}".format(colored(elapsed_time, constants.yellow, attrs=['bold']))
 
         is_hrs_found = connection.detect_hrs_vulnerability(start_time, _timeout)
+        utils.write_payload(_log, "\nResponse:\n{}\n\n\n".format(response))
 
         # If HRS found then it will write the payload to the reports directory
         if is_hrs_found:
@@ -165,8 +198,8 @@ if __name__ == "__main__":
                     print(constants.invalid_method_type)
                     sys.exit(1)
 
-                timeout = int(args.timeout) if args.timeout else 10
-                retry = int(args.retry) if args.retry else 2
+                timeout = int(args.timeout) if args.timeout else constants.default_timeout
+                retry = int(args.retry) if args.retry else constants.default_retry_count
 
                 # To detect the HRS it requires at least 1 retry count
                 if retry == 0:
@@ -207,20 +240,28 @@ if __name__ == "__main__":
                 data = json.load(payloads)
 
                 payload_list = list()
-
+                filter_type = []
+                if args.type:
+                    filter_type = str(args.type).split(",")
                 for permute in data[constants.permute]:
                     for d in data[constants.detection]:
+                        if filter_type and permute[constants.type] not in filter_type:
+                            continue
                         # Based on the retry value it will re-execute the same payload again
                         for _ in range(retry):
-                            transfer_encoding_obj = permute[constants.transfer_encoding]
+                            transfer_encoding_obj = []
+                            if constants.transfer_encoding in permute:
+                                transfer_encoding_obj = permute[constants.transfer_encoding]
                             hrs_detection(host, port, path, method, permute[constants.type],
-                                          permute[constants.content_length_key],
-                                          transfer_encoding_obj[constants.te_key],
-                                          transfer_encoding_obj[constants.te_value],
+                                          permute[constants.content_length_key] if constants.content_length_key in permute else "",
+                                          transfer_encoding_obj[constants.te_key] if constants.te_key in transfer_encoding_obj else "",
+                                          transfer_encoding_obj[constants.te_value] if constants.te_value in transfer_encoding_obj else "",
                                           d[constants.type],
-                                          d[constants.content_length],
-                                          d[constants.payload],
-                                          timeout)
+                                          d[constants.connection] if constants.connection in d else "",
+                                          d[constants.content_type] if constants.content_type in d else "",
+                                          d[constants.content_length] if constants.content_length in d else 0,
+                                          d[constants.payload] if constants.payload in d else "",
+                                          timeout, d)
             except ValueError as _:
                 print(result)
     except KeyboardInterrupt as e:

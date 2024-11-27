@@ -66,7 +66,7 @@ class Utils:
                 os.makedirs(os.path.dirname(file_name))
             except OSError as e:
                 print(e)
-        with open(file_name, "wb") as f:
+        with open(file_name, "ab+") as f:
             f.write(bytes(str(payload), 'utf-8'))
 
     @staticmethod

@@ -26,6 +26,8 @@ class Constants:
         self.te_value = 'te_value'
         self.permute = 'permute'
         self.type = 'type'
+        self.connection = 'connection'
+        self.content_type = 'content-type'
         self.payload = 'payload'
         self.statuscode = 'statuscode'
         self.content_length_key = 'content_length_key'
@@ -57,3 +59,5 @@ class Constants:
                                   "http[s]://example.com"
         self.keyboard_interrupt = 'KeyboardInterrupt'
         self.dis_connected = 'DISCONNECTED'
+        self.default_retry_count = 1
+        self.default_timeout = 10
